@@ -1,0 +1,5 @@
+﻿  Building 'ConsoleApp' with toolset 'WindowsApplicationForDrivers10.0' and the 'Desktop' target platform.
+  ConsoleApp.cpp
+  threadpool.cpp
+  Generating Code...
+  ConsoleApp.vcxproj -> D:\CyberMaster\sem2\wikdd\Lab3\MyFirstDriver\x64\Debug\ConsoleApp.exe
