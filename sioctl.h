@@ -1,9 +1,51 @@
 #ifndef __SIOCTL_H__
 #define __SIOCTL_H__
 
-
 #define IOCTL_FIRST_CALL     CTL_CODE(FILE_DEVICE_UNKNOWN, 0x800, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_SECOND_CALL    CTL_CODE(FILE_DEVICE_UNKNOWN, 0x801, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_FORWARD_TO_D2  CTL_CODE(FILE_DEVICE_UNKNOWN, 0x802, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
+#define IOCTL_TP_INIT        CTL_CODE(FILE_DEVICE_UNKNOWN, 0x810, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_TP_QUEUE_WORK  CTL_CODE(FILE_DEVICE_UNKNOWN, 0x811, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_TP_STOP        CTL_CODE(FILE_DEVICE_UNKNOWN, 0x812, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
+// Level 2: run all threadpool tests in-kernel
+#define IOCTL_TP_RUN_TESTS   CTL_CODE(FILE_DEVICE_UNKNOWN, 0x813, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
+typedef struct _TP_INIT_INPUT
+{
+    ULONG ThreadCount;
+} TP_INIT_INPUT, * PTP_INIT_INPUT;
+
+typedef struct _TP_QUEUE_INPUT
+{
+    ULONG WorkId;
+} TP_QUEUE_INPUT, * PTP_QUEUE_INPUT;
+
+typedef struct _TP_TEST_INPUT
+{
+    ULONG ThreadCount;
+    ULONG WorkItemCount; 
+    ULONG IterationsPerItem;
+} TP_TEST_INPUT, * PTP_TEST_INPUT;
+
+typedef struct _TP_TEST_OUTPUT
+{
+    ULONG Size; 
+
+    ULONG PassedMask;
+    ULONG FailedMask;
+    NTSTATUS OverallStatus;
+
+    ULONG ThreadCountUsed;
+    ULONG WorkItemCountUsed;
+    ULONG IterationsPerItemUsed;
+
+    ULONGLONG ExpectedCounter;
+    ULONGLONG ActualCounter;
+
+    ULONG ProcessedWorkItems; 
+    ULONG StopFreedItems;     
+} TP_TEST_OUTPUT, * PTP_TEST_OUTPUT;
 
 #endif

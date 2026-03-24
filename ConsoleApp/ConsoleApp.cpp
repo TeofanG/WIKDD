@@ -10,6 +10,7 @@
 #include <string.h>
 #include <crtdbg.h>
 #include <winioctl.h>
+#include <stdlib.h>
 #include "../sioctl.h"
 
 #include "threadpool.h"
@@ -28,10 +29,10 @@ typedef struct _MY_CONTEXT
     UINT32 Number;
 } MY_CONTEXT;
 
-static
-NTSTATUS
-SendIoctl(
-    _In_ DWORD IoctlCode
+static NTSTATUS SendIoctl(
+    _In_ DWORD IoctlCode,
+    _In_opt_ void* InBuffer,
+    _In_ DWORD InBufferSize
 )
 {
     HANDLE hDevice = CreateFileA(
@@ -54,8 +55,8 @@ SendIoctl(
     BOOL ok = DeviceIoControl(
         hDevice,
         IoctlCode,
-        nullptr,
-        0,
+        InBuffer,
+        InBufferSize,
         nullptr,
         0,
         &bytesReturned,
@@ -71,6 +72,47 @@ SendIoctl(
     }
 
     return STATUS_SUCCESS;
+}
+
+static NTSTATUS SendIoctlOut(
+    _In_ DWORD IoctlCode,
+    _In_opt_ void* InBuffer,
+    _In_ DWORD InBufferSize,
+    _Out_writes_bytes_(OutBufferSize) void* OutBuffer,
+    _In_ DWORD OutBufferSize,
+    _Out_opt_ DWORD* BytesReturned
+)
+{
+    HANDLE hDevice = CreateFileA(
+        IOCTL_DEVICE_PATH,
+        GENERIC_READ | GENERIC_WRITE,
+        0,
+        nullptr,
+        OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL,
+        nullptr);
+
+    if (hDevice == INVALID_HANDLE_VALUE)
+        return HRESULT_FROM_WIN32(GetLastError());
+
+    DWORD br = 0;
+    BOOL ok = DeviceIoControl(
+        hDevice,
+        IoctlCode,
+        InBuffer,
+        InBufferSize,
+        OutBuffer,
+        OutBufferSize,
+        &br,
+        nullptr);
+
+    DWORD err = ok ? ERROR_SUCCESS : GetLastError();
+    CloseHandle(hDevice);
+
+    if (BytesReturned)
+        *BytesReturned = br;
+
+    return ok ? STATUS_SUCCESS : HRESULT_FROM_WIN32(err);
 }
 
 DWORD WINAPI
@@ -162,6 +204,10 @@ PrintHelp()
     printf("  ioctl1      - Call first driver IOCTL\n");
     printf("  ioctl2      - Call second driver IOCTL\n");
     printf("  ioctl3      - Ask Driver1 to forward an IOCTL to Driver2\n");
+    printf("  starttp     - Start kernel thread pool (5 threads)\n");
+    printf("  stoptp      - Stop kernel thread pool\n");
+    printf("  worktp      - Queue one kernel work item\n");
+    printf("  tptests [t] [w] [i] - Run kernel thread-pool tests (defaults: 5 256 1000)\n");
     printf("  exit        - Exit the application\n");
     printf("==========================\n\n");
 }
@@ -192,7 +238,7 @@ ExecuteCommand(
     }
     else if (strcmp(Command, "ioctl1") == 0)
     {
-        status = SendIoctl(IOCTL_FIRST_CALL);
+        status = SendIoctl(IOCTL_FIRST_CALL, nullptr, 0);
         if (!NT_SUCCESS(status))
         {
             printf("ioctl1 failed. Status: 0x%08X\n", status);
@@ -200,7 +246,7 @@ ExecuteCommand(
     }
     else if (strcmp(Command, "ioctl2") == 0)
     {
-        status = SendIoctl(IOCTL_SECOND_CALL);
+        status = SendIoctl(IOCTL_SECOND_CALL, nullptr, 0);
         if (!NT_SUCCESS(status))
         {
             printf("ioctl2 failed. Status: 0x%08X\n", status);
@@ -208,10 +254,106 @@ ExecuteCommand(
     }
     else if (strcmp(Command, "ioctl3") == 0)
     {
-        status = SendIoctl(IOCTL_FORWARD_TO_D2);
+        status = SendIoctl(IOCTL_FORWARD_TO_D2, nullptr, 0);
         if (!NT_SUCCESS(status))
         {
             printf("ioctl3 failed. Status: 0x%08X\n", status);
+        }
+    }
+    else if (strncmp(Command, "starttp", 7) == 0)
+    {
+        ULONG threads = 5;
+
+        const char* p = Command + 7;
+        while (*p == ' ' || *p == '\t')
+            ++p;
+
+        if (*p != '\0')
+        {
+            char* end = nullptr;
+            unsigned long val = strtoul(p, &end, 10);
+            if (end == p || (*end != '\0' && *end != ' ' && *end != '\t'))
+            {
+                printf("Invalid syntax. Use: starttp [1..10]\n");
+                return STATUS_INVALID_PARAMETER;
+            }
+            threads = (ULONG)val;
+        }
+
+        if (threads < 1 || threads > 10)
+        {
+            printf("Thread count out of range. Use 1..10.\n");
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        TP_INIT_INPUT in = { 0 };
+        in.ThreadCount = threads;
+
+        status = SendIoctl(IOCTL_TP_INIT, &in, (DWORD)sizeof(in));
+        if (!NT_SUCCESS(status))
+            printf("starttp failed. Status: 0x%08X\n", status);
+        else
+            printf("Kernel thread pool started (%lu threads).\n", threads);
+    }
+    else if (strcmp(Command, "stoptp") == 0)
+    {
+        status = SendIoctl(IOCTL_TP_STOP, nullptr, 0);
+        if (!NT_SUCCESS(status))
+            printf("stoptp failed. Status: 0x%08X\n", status);
+        else
+            printf("Kernel thread pool stopped.\n");
+    }
+    else if (strcmp(Command, "worktp") == 0)
+    {
+        static ULONG workId = 0;
+        TP_QUEUE_INPUT in = { 0 };
+        in.WorkId = workId++;
+
+        status = SendIoctl(IOCTL_TP_QUEUE_WORK, &in, (DWORD)sizeof(in));
+        if (!NT_SUCCESS(status))
+            printf("worktp failed. Status: 0x%08X\n", status);
+        else
+            printf("Queued kernel work item %lu.\n", in.WorkId);
+    }
+    else if (strncmp(Command, "tptests", 7) == 0)
+    {
+        TP_TEST_INPUT in = { 0 };
+        in.ThreadCount = 5;
+        in.WorkItemCount = 256;
+        in.IterationsPerItem = 1000;
+
+        unsigned long t = 0, w = 0, it = 0;
+        int n = sscanf_s(Command + 7, "%lu %lu %lu", &t, &w, &it);
+        if (n >= 1) in.ThreadCount = (ULONG)t;
+        if (n >= 2) in.WorkItemCount = (ULONG)w;
+        if (n >= 3) in.IterationsPerItem = (ULONG)it;
+
+        TP_TEST_OUTPUT out = { 0 };
+        DWORD bytes = 0;
+
+        status = SendIoctlOut(
+            IOCTL_TP_RUN_TESTS,
+            &in,
+            (DWORD)sizeof(in),
+            &out,
+            (DWORD)sizeof(out),
+            &bytes);
+
+        if (!NT_SUCCESS(status))
+        {
+            printf("tptests failed. Status: 0x%08X\n", status);
+        }
+        else
+        {
+            printf("TP tests OverallStatus: 0x%08X\n", out.OverallStatus);
+            printf("PassedMask=0x%08X FailedMask=0x%08X\n", out.PassedMask, out.FailedMask);
+            printf("Threads=%lu WorkItems=%lu Iters=%lu\n",
+                out.ThreadCountUsed, out.WorkItemCountUsed, out.IterationsPerItemUsed);
+            printf("Processed=%lu Expected=%llu Actual=%llu StopFreed=%lu\n",
+                out.ProcessedWorkItems,
+                out.ExpectedCounter,
+                out.ActualCounter,
+                out.StopFreedItems);
         }
     }
     else if (strcmp(Command, "test") == 0)
