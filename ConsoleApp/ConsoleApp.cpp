@@ -208,6 +208,8 @@ PrintHelp()
     printf("  stoptp      - Stop kernel thread pool\n");
     printf("  worktp      - Queue one kernel work item\n");
     printf("  tptests [t] [w] [i] - Run kernel thread-pool tests (defaults: 5 256 1000)\n");
+    printf("  protect <PID> - Protect a process from termination\n");
+    printf("  unprotect <PID> - Remove protection from a process\n");
     printf("  exit        - Exit the application\n");
     printf("==========================\n\n");
 }
@@ -457,6 +459,46 @@ ExecuteCommand(
             }
         }
     }
+    else if (strncmp(Command, "protect ", 8) == 0)
+    {
+        ULONG pid = (ULONG)atoi(Command + 8);
+        if (pid > 0)
+        {
+            status = SendIoctl(IOCTL_PROTECT_PROCESS, &pid, sizeof(pid));
+            if (NT_SUCCESS(status))
+            {
+                printf("Process %lu protected.\n", pid);
+            }
+            else
+            {
+                printf("Failed to protect process %lu. Status: 0x%08X\n", pid, status);
+            }
+        }
+        else
+        {
+            printf("Invalid PID. Usage: protect <PID>\n");
+        }
+    }
+    else if (strncmp(Command, "unprotect ", 10) == 0)
+    {
+        ULONG pid = (ULONG)atoi(Command + 10);
+        if (pid > 0)
+        {
+            status = SendIoctl(IOCTL_UNPROTECT_PROCESS, &pid, sizeof(pid));
+            if (NT_SUCCESS(status))
+            {
+                printf("Process %lu unprotected.\n", pid);
+            }
+            else
+            {
+                printf("Failed to unprotect process %lu. Status: 0x%08X\n", pid, status);
+            }
+        }
+        else
+        {
+            printf("Invalid PID. Usage: unprotect <PID>\n");
+        }
+    }
     else if (strcmp(Command, "exit") == 0)
     {
         printf("Exiting application...\n");
@@ -469,6 +511,60 @@ ExecuteCommand(
     }
 
     return status;
+}
+
+BOOL ProtectProcessCommand(HANDLE hDevice, ULONG pid)
+{
+    PROTECT_PROCESS_INPUT input = { 0 };
+    input.ProcessId = pid;
+
+    BOOL result = DeviceIoControl(
+        hDevice,
+        IOCTL_PROTECT_PROCESS,
+        &input,
+        sizeof(PROTECT_PROCESS_INPUT),
+        NULL,
+        0,
+        NULL,
+        NULL);
+
+    if (result)
+    {
+        printf("Process %lu is now protected from termination.\n", pid);
+    }
+    else
+    {
+        printf("Failed to protect process %lu. Error: %lu\n", pid, GetLastError());
+    }
+
+    return result;
+}
+
+BOOL UnprotectProcessCommand(HANDLE hDevice, ULONG pid)
+{
+    PROTECT_PROCESS_INPUT input = { 0 };
+    input.ProcessId = pid;
+
+    BOOL result = DeviceIoControl(
+        hDevice,
+        IOCTL_UNPROTECT_PROCESS,
+        &input,
+        sizeof(PROTECT_PROCESS_INPUT),
+        NULL,
+        0,
+        NULL,
+        NULL);
+
+    if (result)
+    {
+        printf("Process %lu is no longer protected.\n", pid);
+    }
+    else
+    {
+        printf("Failed to unprotect process %lu. Error: %lu\n", pid, GetLastError());
+    }
+
+    return result;
 }
 
 int main()

@@ -9,6 +9,14 @@
 
 #define TP_MAX_THREADS 10
 
+NTSTATUS NotificationsInit(_In_ PDRIVER_OBJECT DriverObject);
+VOID NotificationsCleanup(void);
+
+NTSTATUS ProcessProtectionInit(void);
+VOID ProcessProtectionCleanup(void);
+NTSTATUS ProtectProcess(_In_ ULONG ProcessId);
+NTSTATUS UnprotectProcess(_In_ ULONG ProcessId);
+
 static PDEVICE_OBJECT g_D2DeviceObject = NULL;
 static PFILE_OBJECT   g_D2FileObject = NULL;
 
@@ -25,8 +33,8 @@ typedef struct _KERNEL_THREAD_POOL
     ULONG ThreadCount;
     HANDLE ThreadHandles[TP_MAX_THREADS];
 
-    KEVENT StopEvent;          
-    KEVENT WorkAvailableEvent; 
+    KEVENT StopEvent;
+    KEVENT WorkAvailableEvent;
 
     KSPIN_LOCK QueueLock;
     LIST_ENTRY WorkQueue;
@@ -426,6 +434,36 @@ static NTSTATUS DriverDeviceControl(_In_ PDEVICE_OBJECT DeviceObject, _In_ PIRP 
         return st;
     }
 
+    case IOCTL_PROTECT_PROCESS:
+    {
+        if (irpSp->Parameters.DeviceIoControl.InputBufferLength < sizeof(PROTECT_PROCESS_INPUT))
+        {
+            CompleteIrp(Irp, STATUS_BUFFER_TOO_SMALL, 0);
+            return STATUS_BUFFER_TOO_SMALL;
+        }
+
+        PPROTECT_PROCESS_INPUT in = (PPROTECT_PROCESS_INPUT)Irp->AssociatedIrp.SystemBuffer;
+        NTSTATUS st = ProtectProcess(in->ProcessId);
+
+        CompleteIrp(Irp, st, 0);
+        return st;
+    }
+
+    case IOCTL_UNPROTECT_PROCESS:
+    {
+        if (irpSp->Parameters.DeviceIoControl.InputBufferLength < sizeof(PROTECT_PROCESS_INPUT))
+        {
+            CompleteIrp(Irp, STATUS_BUFFER_TOO_SMALL, 0);
+            return STATUS_BUFFER_TOO_SMALL;
+        }
+
+        PPROTECT_PROCESS_INPUT in = (PPROTECT_PROCESS_INPUT)Irp->AssociatedIrp.SystemBuffer;
+        NTSTATUS st = UnprotectProcess(in->ProcessId);
+
+        CompleteIrp(Irp, st, 0);
+        return st;
+    }
+
     default:
         CompleteIrp(Irp, STATUS_INVALID_DEVICE_REQUEST, 0);
         return STATUS_INVALID_DEVICE_REQUEST;
@@ -438,6 +476,9 @@ static VOID DriverUnload(_In_ PDRIVER_OBJECT DriverObject)
     IoDeleteSymbolicLink(&symLink);
 
     (VOID)TpStop(&g_Tp);
+
+    ProcessProtectionCleanup();
+    NotificationsCleanup();
 
     if (DriverObject->DeviceObject)
         IoDeleteDevice(DriverObject->DeviceObject);
@@ -487,6 +528,27 @@ NTSTATUS DriverEntry(_In_ PDRIVER_OBJECT DriverObject, _In_ PUNICODE_STRING Regi
     DriverObject->MajorFunction[IRP_MJ_CLOSE] = DriverCreateClose;
     DriverObject->MajorFunction[IRP_MJ_DEVICE_CONTROL] = DriverDeviceControl;
     DriverObject->DriverUnload = DriverUnload;
+
+    // Initialize process protection
+    status = ProcessProtectionInit();
+    if (!NT_SUCCESS(status))
+    {
+        UNICODE_STRING symLink2 = RTL_CONSTANT_STRING(SYMLINK_NAME);
+        IoDeleteSymbolicLink(&symLink2);
+        IoDeleteDevice(deviceObject);
+        return status;
+    }
+
+    // Initialize notifications
+    status = NotificationsInit(DriverObject);
+    if (!NT_SUCCESS(status))
+    {
+        UNICODE_STRING symLink2 = RTL_CONSTANT_STRING(SYMLINK_NAME);
+        IoDeleteSymbolicLink(&symLink2);
+        IoDeleteDevice(deviceObject);
+        ProcessProtectionCleanup();
+        return status;
+    }
 
     deviceObject->Flags &= ~DO_DEVICE_INITIALIZING;
 
